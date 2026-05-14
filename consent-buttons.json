@@ -6,5 +6,7 @@
   "Ja, ik accepteer optimale cookies",
   "Accept All Cookies",
   "Akkoord",
-  "Alle cookies accepteren"
+  "Alle cookies accepteren",
+  "/html/body/ngb-modal-window/div/div/wl-cookiewall/div[3]/div/crnt-button[1]",
+  "//*[@id=\"cookie-banner\"]//div/div/div/div/div/button[1]"
 ]

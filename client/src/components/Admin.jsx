@@ -9,6 +9,7 @@ export default function Admin() {
   const [error, setError] = useState("");
   const [consentTexts, setConsentTexts] = useState([]);
   const [newConsent, setNewConsent] = useState("");
+  const [newXPath, setNewXPath] = useState("");
   const [consentSaving, setConsentSaving] = useState(false);
   const [consentSaved, setConsentSaved] = useState(false);
 
@@ -69,6 +70,14 @@ export default function Admin() {
     if (!trimmed || consentTexts.includes(trimmed)) return;
     setConsentTexts([...consentTexts, trimmed]);
     setNewConsent("");
+    setConsentSaved(false);
+  };
+
+  const addXPath = () => {
+    const trimmed = newXPath.trim();
+    if (!trimmed || consentTexts.includes(trimmed)) return;
+    setConsentTexts([...consentTexts, trimmed]);
+    setNewXPath("");
     setConsentSaved(false);
   };
 
@@ -159,23 +168,28 @@ export default function Admin() {
       <div className="admin-section">
         <div className="admin-section-header">
           <h3>🍪 Cookie Consent Button Texts</h3>
-          <span className="admin-count">{consentTexts.length} texts</span>
+          <span className="admin-count">
+            {consentTexts.filter(t => !t.startsWith('/') && !t.startsWith('(')).length} texts
+          </span>
         </div>
 
         <div className="admin-list">
-          {consentTexts.map((text, i) => (
-            <div className="admin-list-item" key={i}>
-              <span className="admin-list-index">{i + 1}</span>
-              <span className="admin-list-text">{text}</span>
-              <div className="admin-list-actions">
-                <button
-                  className="btn btn-ghost btn-sm btn-danger"
-                  onClick={() => removeConsent(i)}
-                  title="Remove"
-                >✕</button>
+          {consentTexts.map((text, i) => {
+            if (text.startsWith('/') || text.startsWith('(')) return null;
+            return (
+              <div className="admin-list-item" key={i}>
+                <span className="admin-list-index">•</span>
+                <span className="admin-list-text">{text}</span>
+                <div className="admin-list-actions">
+                  <button
+                    className="btn btn-ghost btn-sm btn-danger"
+                    onClick={() => removeConsent(i)}
+                    title="Remove"
+                  >✕</button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="admin-add-row">
@@ -186,18 +200,61 @@ export default function Admin() {
             onChange={(e) => setNewConsent(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && addConsent()}
           />
-          <button className="btn btn-secondary" onClick={addConsent}>+ Add</button>
+          <button className="btn btn-secondary" onClick={addConsent}>+ Add Text</button>
+        </div>
+      </div>
+
+      {/* ── XPaths Editor ── */}
+      <div className="admin-section">
+        <div className="admin-section-header">
+          <h3>🎯 Cookie Consent XPaths</h3>
+          <span className="admin-count">
+            {consentTexts.filter(t => t.startsWith('/') || t.startsWith('(')).length} paths
+          </span>
         </div>
 
-        <div className="admin-save-row">
+        <div className="admin-list">
+          {consentTexts.map((text, i) => {
+            if (!text.startsWith('/') && !text.startsWith('(')) return null;
+            return (
+              <div className="admin-list-item" key={i}>
+                <span className="admin-list-index">#</span>
+                <span className="admin-list-text" style={{ fontFamily: 'monospace', fontSize: '0.9em', color: 'var(--primary)' }}>
+                  {text}
+                </span>
+                <div className="admin-list-actions">
+                  <button
+                    className="btn btn-ghost btn-sm btn-danger"
+                    onClick={() => removeConsent(i)}
+                    title="Remove"
+                  >✕</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="admin-add-row">
+          <input
+            type="text"
+            placeholder="e.g. //button[@id='accept']"
+            value={newXPath}
+            onChange={(e) => setNewXPath(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addXPath()}
+          />
+          <button className="btn btn-secondary" onClick={addXPath}>+ Add XPath</button>
+        </div>
+
+        <div className="admin-save-row" style={{ marginTop: '2rem', paddingTop: '2rem', borderTop: '1px solid var(--border)' }}>
           <button
             className="btn btn-primary"
             onClick={saveConsent}
             disabled={consentSaving}
+            style={{ width: '100%', justifyContent: 'center' }}
           >
-            {consentSaving ? "Saving..." : "💾 Save Consent Texts"}
+            {consentSaving ? "Saving..." : "💾 Save All Consent Config"}
           </button>
-          {consentSaved && <span className="admin-saved">✅ Saved!</span>}
+          {consentSaved && <span className="admin-saved" style={{ marginLeft: '1rem' }}>✅ Saved!</span>}
         </div>
       </div>
     </div>

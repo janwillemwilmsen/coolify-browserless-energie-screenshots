@@ -65,81 +65,116 @@ function loadConsentTexts() {
 async function dismissCookieConsent(page) {
   const texts = loadConsentTexts();
 
-  const clickConsentInContext = async (context, consentTexts) => {
+  // 1. Wait a bit for the banner to actually show up (sometimes it's delayed)
+  try {
+    await page.waitForFunction(() => {
+      const selectors = ['[id*="cookie" i]', '[class*="cookie" i]', '[id*="consent" i]', '[class*="consent" i]', '#usercentrics-root'];
+      return selectors.some(s => document.querySelector(s));
+    }, { timeout: 3000 }).catch(() => {});
+  } catch (e) {}
+
+  const clickOrHideInContext = async (context, consentTexts) => {
     return await context.evaluate((texts) => {
-      const lowerTexts = texts.map((t) => t.toLowerCase().trim());
+      const xpaths = texts.filter(t => t.startsWith('/') || t.startsWith('('));
+      const lowerTexts = texts.filter(t => !t.startsWith('/') && !t.startsWith('(')).map((t) => t.toLowerCase().trim());
       
-      const getAllElements = (root) => {
-        let elements = Array.from(root.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], span, div'));
-        const activeElements = [];
-        
-        for (const el of elements) {
-          activeElements.push(el);
-          if (el.shadowRoot) {
-            activeElements.push(...getAllElements(el.shadowRoot));
+      const roots = [document];
+      const gatherRoots = (root) => {
+        try {
+          const all = root.querySelectorAll('*');
+          for (const el of all) {
+            if (el.shadowRoot) {
+              roots.push(el.shadowRoot);
+              gatherRoots(el.shadowRoot);
+            }
+          }
+        } catch (e) {}
+      };
+      gatherRoots(document);
+
+      // Try XPaths in every root
+      for (const xpath of xpaths) {
+        for (const root of roots) {
+          try {
+            const result = document.evaluate(xpath, root, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+            const el = result.singleNodeValue;
+            if (el && typeof el.click === 'function') {
+              const rect = el.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                el.click();
+                return "clicked";
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Try Text matching in every root
+      let bestCandidate = null;
+      let highestScore = 0;
+
+      for (const root of roots) {
+        const els = Array.from(root.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], span, div'));
+        for (const el of els) {
+          const text = (el.textContent || el.innerText || el.value || "").toLowerCase().trim();
+          if (!text) continue;
+
+          let score = 0;
+          if (lowerTexts.includes(text)) score += 100;
+          else if (lowerTexts.some(t => text.includes(t) && text.length < t.length + 10)) score += 50;
+          
+          if (score === 0) continue;
+
+          const tag = el.tagName.toUpperCase();
+          if (tag === 'BUTTON' || tag === 'INPUT' || el.getAttribute('role') === 'button') score += 50;
+          if ((tag === 'DIV' || tag === 'SPAN') && !el.onclick && !el.getAttribute('onclick')) score -= 30;
+
+          const rect = el.getBoundingClientRect();
+          const isVisible = rect.width > 1 && rect.height > 1 && window.getComputedStyle(el).display !== 'none';
+          
+          if (isVisible && score > highestScore) {
+            highestScore = score;
+            bestCandidate = el;
           }
         }
-        return activeElements;
-      };
-
-      const candidates = getAllElements(document);
-      
-      const scored = candidates.map(el => {
-        const text = (el.textContent || el.innerText || el.value || "").toLowerCase().trim();
-        if (!text) return null;
-
-        let score = 0;
-        // Exact match is highly preferred
-        if (lowerTexts.includes(text)) score += 100;
-        // Partial match only if it's very close (prevents clicking long paragraphs)
-        else if (lowerTexts.some(t => text.includes(t) && text.length < t.length + 10)) score += 50;
-        
-        if (score === 0) return null;
-
-        // Major boost for actual interactive tags
-        const tag = el.tagName.toUpperCase();
-        if (tag === 'BUTTON' || tag === 'INPUT') score += 50;
-        if (el.getAttribute('role') === 'button') score += 50;
-        if (tag === 'A') score += 20;
-        
-        // Penalize generic tags unless they have an onclick or role
-        if (tag === 'DIV' || tag === 'SPAN') {
-          if (!el.onclick && !el.getAttribute('onclick')) score -= 30;
-        }
-
-        // Visibility check
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        const isVisible = rect.width > 1 && rect.height > 1 && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-        
-        if (!isVisible) return null;
-
-        return { el, score };
-      }).filter(Boolean);
-
-      scored.sort((a, b) => b.score - a.score);
-
-      if (scored.length > 0) {
-        const best = scored[0].el;
-        best.click();
-        return true;
       }
-      return false;
+
+      if (bestCandidate) {
+        bestCandidate.click();
+        return "clicked";
+      }
+
+      // 4. NUCLEAR OPTION: If we find something that LOOKS like a banner but couldn't click it, HIDE IT
+      let hidden = false;
+      for (const root of roots) {
+        const banners = root.querySelectorAll('[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i], #usercentrics-root');
+        for (const b of banners) {
+          const rect = b.getBoundingClientRect();
+          if (rect.width > 100 && rect.height > 50) { // Large enough to be a banner
+            b.style.display = 'none';
+            b.style.opacity = '0';
+            b.style.pointerEvents = 'none';
+            hidden = true;
+          }
+        }
+      }
+      return hidden ? "hidden" : "none";
     }, texts);
   };
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const clicked = await clickConsentInContext(page, texts);
-    if (clicked) {
-      await sleep(1500);
-      return true;
+    const result = await clickOrHideInContext(page, texts);
+    if (result !== "none") {
+      await sleep(2500); // Wait longer for animation
+      return result;
     }
 
     for (const frame of page.frames()) {
       try {
-        if (await clickConsentInContext(frame, texts)) {
-          await sleep(1500);
-          return true;
+        const frameResult = await clickOrHideInContext(frame, texts);
+        if (frameResult !== "none") {
+          await sleep(2500);
+          return frameResult;
         }
       } catch (err) {}
     }
@@ -222,7 +257,7 @@ async function screenshotPage(url, viewportName, browserlessUrl, browserlessToke
 
   const wsEndpoint = `${browserlessUrl
     .replace("https://", "wss://")
-    .replace("http://", "ws://")}?token=${browserlessToken}&--disable-blink-features=AutomationControlled`;
+    .replace("http://", "ws://")}?token=${browserlessToken}&blockAds=true&stealth=true&--disable-blink-features=AutomationControlled`;
 
   const browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
   try {
