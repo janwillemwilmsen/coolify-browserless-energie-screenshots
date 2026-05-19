@@ -122,12 +122,12 @@ app.delete("/api/scenarios/:id", auth, (req, res) => {
 
 app.post("/api/test-scenario", auth, async (req, res) => {
   try {
-    const { url, steps } = req.body;
+    const { url, steps, viewport } = req.body;
     if (!url) return res.status(400).json({ error: "URL is required" });
     
     // We cannot wait synchronously without risking standard HTTP timeouts if it's super long, 
     // but tests should usually be < 60s. So we just wait.
-    const result = await runTestScenario(url, steps || [], BROWSERLESS_URL, BROWSERLESS_TOKEN);
+    const result = await runTestScenario(url, steps || [], viewport, BROWSERLESS_URL, BROWSERLESS_TOKEN);
     if (!result.success) {
       return res.status(500).json({ error: result.error });
     }

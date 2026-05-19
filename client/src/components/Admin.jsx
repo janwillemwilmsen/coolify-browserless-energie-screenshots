@@ -14,6 +14,7 @@ export default function Admin() {
   const [scenarioText, setScenarioText] = useState({}); // store raw text per scenario index
   const [testImage, setTestImage] = useState(null);
   const [isTesting, setIsTesting] = useState(false);
+  const [testViewport, setTestViewport] = useState("desktop");
 
   const [consentTexts, setConsentTexts] = useState([]);
   const [newConsent, setNewConsent] = useState("");
@@ -131,7 +132,7 @@ export default function Admin() {
     setIsTesting(true);
     setTestImage(null);
     try {
-      const res = await api.testScenario(activeTarget.url, stepsArray);
+      const res = await api.testScenario(activeTarget.url, stepsArray, testViewport);
       setTestImage(`data:image/jpeg;base64,${res.imageBase64}`);
     } catch (err) {
       alert("Test failed: " + err.message);
@@ -305,11 +306,13 @@ export default function Admin() {
 
           <div style={{ background: 'var(--bg-card)', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', border: '1px solid var(--border)', fontSize: '0.9rem' }}>
             <h4 style={{ marginTop: 0 }}>📖 Scenario JSON Examples</h4>
-            <p style={{ color: 'var(--text-muted)' }}>Paste these examples into your scenario and modify them. Valid <code>locatorType</code> values map directly to Playwright's APIs: <code>css</code> (locator), <code>role</code> (getByRole), <code>text</code> (getByText), <code>label</code> (getByLabel), <code>placeholder</code> (getByPlaceholder), <code>alt</code> (getByAltText), <code>title</code> (getByTitle), <code>testid</code> (getByTestId).</p>
+            <p style={{ color: 'var(--text-muted)' }}>Paste these examples into your scenario and modify them. Valid <code>locatorType</code> values map directly to Playwright's APIs: <code>css</code> (locator), <code>role</code> (getByRole), <code>text</code> (getByText), <code>label</code> (getByLabel), <code>placeholder</code> (getByPlaceholder), <code>alt</code> (getByAltText), <code>title</code> (getByTitle), <code>testid</code> (getByTestId). You can optionally set <code>nth</code> (zero-based) to target the Nth match; without it, the first match is used.</p>
             <pre style={{ background: 'var(--bg-body)', padding: '10px', borderRadius: '4px', overflowX: 'auto', border: '1px solid var(--border)' }}>
 {`[
   { "type": "click", "locatorType": "role", "selector": ["button", { "name": "Sign in" }] },
   { "type": "type", "locatorType": "label", "selector": "User Name", "value": "John" },
+  { "type": "click", "locatorType": "css", "selector": ".product-card .buy-btn", "nth": 2 },
+  { "type": "type", "locatorType": "css", "selector": "input[name='email']", "nth": 1, "value": "john@example.com" },
   { "type": "type", "locatorType": "placeholder", "selector": "Password", "value": "secret" },
   { "type": "wait", "ms": 2000 },
   { "type": "waitForSelector", "locatorType": "text", "selector": "Welcome back" },
@@ -337,11 +340,20 @@ export default function Admin() {
                 placeholder="[\n  { ... }\n]"
               />
 
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', alignItems: 'center' }}>
                 <button className="btn btn-secondary" onClick={() => runTestScenario(sIdx)} disabled={isTesting}>
                   {isTesting ? "⏳ Running Test..." : "▶️ Test Scenario"}
                 </button>
-                <button className="btn btn-primary" onClick={saveScenarios} disabled={scenarioSaving}>
+                <select 
+                  value={testViewport} 
+                  onChange={(e) => setTestViewport(e.target.value)}
+                  style={{ padding: '8px', borderRadius: '4px', background: 'var(--bg-body)', color: 'var(--text-main)', border: '1px solid var(--border)' }}
+                >
+                  <option value="desktop">Desktop (1920x1080)</option>
+                  <option value="tablet">Tablet (1024x800)</option>
+                  <option value="mobile">Mobile (390x844)</option>
+                </select>
+                <button className="btn btn-primary" onClick={saveScenarios} disabled={scenarioSaving} style={{ marginLeft: 'auto' }}>
                   {scenarioSaving ? "Saving..." : "💾 Save Scenario"}
                 </button>
               </div>

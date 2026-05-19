@@ -72,11 +72,11 @@ export const api = {
       body: JSON.stringify(data),
     }),
   deleteScenario: (id) => request(`/api/scenarios/${id}`, { method: "DELETE" }),
-  testScenario: (url, steps) =>
+  testScenario: (url, steps, viewport) =>
     request("/api/test-scenario", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, steps }),
+      body: JSON.stringify({ url, steps, viewport }),
     }),
   getConsentButtons: () => request("/api/consent-buttons"),
   saveConsentButtons: (texts) =>
