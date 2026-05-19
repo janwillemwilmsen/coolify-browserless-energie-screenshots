@@ -4,8 +4,11 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import cron from "node-cron";
-import { parseStringPromise } from "xml2js";
-import { runScreenshots, runSingleScreenshot, getRunStatus, urlToSlug } from "./screenshot-worker.js";
+import { runScreenshots, runSingleScreenshot, getRunStatus, urlToSlug, runTestScenario } from "./screenshot-worker.js";
+import { 
+  migrateIfNeeded, getTargets, getTarget, addTarget, updateTarget, deleteTarget,
+  getScenarios, addScenario, updateScenario, deleteScenario 
+} from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -39,17 +42,97 @@ app.get("/api/verify", auth, (_req, res) => {
   res.json({ ok: true });
 });
 
-// List all URLs from sitemap
+// List all URLs (legacy compatibility for client, but pulls from DB now)
 app.get("/api/urls", auth, async (_req, res) => {
   try {
-    const xml = fs.readFileSync(path.join(__dirname, "sitemap.xml"), "utf-8");
-    const result = await parseStringPromise(xml);
-    const urls = result.urlset.url.map((u) => {
-      const loc = u.loc[0];
-      const slug = urlToSlug(loc);
-      return { url: loc, slug };
-    });
-    res.json(urls);
+    const targets = getTargets();
+    // Return the old format for now until frontend updates
+    res.json(targets.map(t => ({ url: t.url, slug: t.slug })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Targets CRUD ───────────────────────────────────────────────────────────
+app.get("/api/targets", auth, (_req, res) => {
+  try { res.json(getTargets()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/targets", auth, (req, res) => {
+  try {
+    const { url, brand, type } = req.body;
+    if (!url) return res.status(400).json({ error: "URL is required" });
+    res.json(addTarget(url, brand, type));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/targets/:id", auth, (req, res) => {
+  try {
+    res.json(updateTarget(req.params.id, req.body));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/targets/:id", auth, (req, res) => {
+  try {
+    deleteTarget(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Scenarios CRUD ─────────────────────────────────────────────────────────
+app.get("/api/targets/:id/scenarios", auth, (req, res) => {
+  try { res.json(getScenarios(req.params.id)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/targets/:id/scenarios", auth, (req, res) => {
+  try {
+    const { name, steps } = req.body;
+    if (!name) return res.status(400).json({ error: "Name is required" });
+    res.json(addScenario(req.params.id, name, steps || []));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/scenarios/:id", auth, (req, res) => {
+  try {
+    const { name, steps } = req.body;
+    res.json(updateScenario(req.params.id, name, steps));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/scenarios/:id", auth, (req, res) => {
+  try {
+    deleteScenario(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/test-scenario", auth, async (req, res) => {
+  try {
+    const { url, steps } = req.body;
+    if (!url) return res.status(400).json({ error: "URL is required" });
+    
+    // We cannot wait synchronously without risking standard HTTP timeouts if it's super long, 
+    // but tests should usually be < 60s. So we just wait.
+    const result = await runTestScenario(url, steps || [], BROWSERLESS_URL, BROWSERLESS_TOKEN);
+    if (!result.success) {
+      return res.status(500).json({ error: result.error });
+    }
+    
+    res.json({ imageBase64: result.imageBase64 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -206,28 +289,6 @@ app.get("/api/consent-buttons", auth, (_req, res) => {
   }
 });
 
-// Save sitemap URLs
-app.put("/api/sitemap", auth, (req, res) => {
-  try {
-    const { urls } = req.body;
-    if (!Array.isArray(urls)) {
-      return res.status(400).json({ error: "urls must be an array" });
-    }
-    // Build XML
-    const xmlLines = [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-    ];
-    for (const url of urls) {
-      xmlLines.push(`  <url>\n    <loc>${url}</loc>\n  </url>`);
-    }
-    xmlLines.push("</urlset>", "");
-    fs.writeFileSync(path.join(__dirname, "sitemap.xml"), xmlLines.join("\n"));
-    res.json({ ok: true, count: urls.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // Save consent button texts
 app.put("/api/consent-buttons", auth, (req, res) => {
@@ -261,6 +322,9 @@ if (cron.validate(CRON_SCHEDULE)) {
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`🚀 Screenshot Monitor running on http://localhost:${PORT}`);
-});
+(async () => {
+  await migrateIfNeeded();
+  app.listen(PORT, () => {
+    console.log(`🚀 Screenshot Monitor running on http://localhost:${PORT}`);
+  });
+})();

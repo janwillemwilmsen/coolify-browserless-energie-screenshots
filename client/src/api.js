@@ -44,11 +44,39 @@ export const api = {
     }),
   deleteScreenshot: (date, viewport, slug) =>
     request(`/api/screenshot/${date}/${viewport}/${slug}`, { method: "DELETE" }),
-  saveSitemap: (urls) =>
-    request("/api/sitemap", {
+  getTargets: () => request("/api/targets"),
+  addTarget: (data) =>
+    request("/api/targets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  updateTarget: (id, data) =>
+    request(`/api/targets/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ urls }),
+      body: JSON.stringify(data),
+    }),
+  deleteTarget: (id) => request(`/api/targets/${id}`, { method: "DELETE" }),
+  getScenarios: (targetId) => request(`/api/targets/${targetId}/scenarios`),
+  addScenario: (targetId, data) =>
+    request(`/api/targets/${targetId}/scenarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  updateScenario: (id, data) =>
+    request(`/api/scenarios/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteScenario: (id) => request(`/api/scenarios/${id}`, { method: "DELETE" }),
+  testScenario: (url, steps) =>
+    request("/api/test-scenario", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, steps }),
     }),
   getConsentButtons: () => request("/api/consent-buttons"),
   saveConsentButtons: (texts) =>

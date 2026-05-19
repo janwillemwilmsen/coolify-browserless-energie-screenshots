@@ -4,6 +4,7 @@ import Header from "./components/Header";
 import Dashboard from "./components/Dashboard";
 import CompareView from "./components/CompareView";
 import Admin from "./components/Admin";
+import HtmlConverter from "./components/HtmlConverter";
 
 function parseHash() {
   const hash = window.location.hash.slice(1); // remove #
@@ -15,6 +16,9 @@ function parseHash() {
   }
   if (parts[0] === "admin") {
     return { view: "admin" };
+  }
+  if (parts[0] === "converter") {
+    return { view: "converter" };
   }
   return { view: "dashboard" };
 }
@@ -48,7 +52,7 @@ export default function App() {
   // Load data when authenticated
   useEffect(() => {
     if (!authed) return;
-    api.getUrls().then(setUrls).catch(console.error);
+    api.getTargets().then(setUrls).catch(console.error);
     api.getDates().then(setDates).catch(console.error);
   }, [authed]);
 
@@ -135,6 +139,8 @@ export default function App() {
             slug={route.slug}
             onBack={handleBack}
           />
+        ) : route.view === "converter" ? (
+          <HtmlConverter />
         ) : (
           <Dashboard
             urls={urls}

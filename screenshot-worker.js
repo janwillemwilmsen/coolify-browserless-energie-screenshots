@@ -1,11 +1,11 @@
-import puppeteer from "puppeteer-extra";
+import { chromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import fs from "fs";
 import path from "path";
-import { parseStringPromise } from "xml2js";
 import { fileURLToPath } from "url";
+import { getTargets, getScenarios } from "./db.js";
 
-puppeteer.use(StealthPlugin());
+chromium.use(StealthPlugin());
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,11 +44,7 @@ export function slugToDisplay(slug) {
   return slug.replace(/-/g, ".");
 }
 
-async function parseSitemap() {
-  const xml = fs.readFileSync(path.join(__dirname, "sitemap.xml"), "utf-8");
-  const result = await parseStringPromise(xml);
-  return result.urlset.url.map((u) => u.loc[0]);
-}
+
 
 function loadConsentTexts() {
   try {
@@ -185,69 +181,77 @@ async function dismissCookieConsent(page) {
 
 // ── Auto-scroll for lazy loading ───────────────────────────────────────────
 async function autoScroll(page) {
-  await page.evaluate(async () => {
-    await new Promise((resolve) => {
-      let totalHeight = 0;
-      const distance = 400;
-      const timer = setInterval(() => {
-        const scrollHeight = document.body.scrollHeight;
-        window.scrollBy(0, distance);
-        totalHeight += distance;
-        if (totalHeight >= scrollHeight) {
-          clearInterval(timer);
-          resolve();
-        }
-      }, 250);
+  try {
+    await page.evaluate(async () => {
+      await new Promise((resolve) => {
+        let totalHeight = 0;
+        const distance = 400;
+        const timer = setInterval(() => {
+          const scrollHeight = document.body.scrollHeight;
+          window.scrollBy(0, distance);
+          totalHeight += distance;
+          if (totalHeight >= scrollHeight) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 250);
+      });
     });
-  });
 
-  // Wait for any remaining lazy loads
-  await sleep(2000);
+    // Wait for any remaining lazy loads
+    await sleep(2000);
 
-  // Scroll back to top
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await sleep(1000);
+    // Scroll back to top
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(1000);
+  } catch (e) {
+    console.log("[TEST] ⚠️ autoScroll aborted (page likely navigated)");
+  }
 }
 
 // ── Force page to be fully scrollable ──────────────────────────────────────
 async function forceFullPageScroll(page) {
-  await page.evaluate(() => {
-    // Remove overflow:hidden from html and body (often set by cookie consent overlays)
-    document.documentElement.style.overflow = "visible";
-    document.documentElement.style.height = "auto";
-    document.body.style.overflow = "visible";
-    document.body.style.height = "auto";
+  try {
+    await page.evaluate(() => {
+      // Remove overflow:hidden from html and body (often set by cookie consent overlays)
+      document.documentElement.style.overflow = "visible";
+      document.documentElement.style.height = "auto";
+      document.body.style.overflow = "visible";
+      document.body.style.height = "auto";
 
-    // Also remove position:fixed from any full-page overlay containers
-    // that might constrain the page height
-    const els = document.querySelectorAll('[style*="overflow: hidden"], [style*="overflow:hidden"]');
-    els.forEach((el) => {
-      if (el.tagName !== "IFRAME") {
+      // Also remove position:fixed from any full-page overlay containers
+      // that might constrain the page height
+      const els = document.querySelectorAll('[style*="overflow: hidden"], [style*="overflow:hidden"]');
+      els.forEach((el) => {
+        if (el.tagName !== "IFRAME") {
+          el.style.overflow = "visible";
+        }
+      });
+
+      // Remove any max-height constraints on common wrapper elements
+      const wrappers = document.querySelectorAll("#__next, #app, #root, .page-wrapper, .site-wrapper, main");
+      wrappers.forEach((el) => {
         el.style.overflow = "visible";
-      }
-    });
+        el.style.height = "auto";
+        el.style.maxHeight = "none";
+      });
 
-    // Remove any max-height constraints on common wrapper elements
-    const wrappers = document.querySelectorAll("#__next, #app, #root, .page-wrapper, .site-wrapper, main");
-    wrappers.forEach((el) => {
-      el.style.overflow = "visible";
-      el.style.height = "auto";
-      el.style.maxHeight = "none";
+      // Remove any position:fixed overlays that block content
+      const fixedEls = document.querySelectorAll('[class*="overlay"], [class*="modal"], [class*="backdrop"], [id*="consent"], [id*="cookie"]');
+      fixedEls.forEach((el) => {
+        const style = window.getComputedStyle(el);
+        if (style.position === "fixed" && parseFloat(style.opacity) < 0.1) {
+          el.remove();
+        }
+      });
     });
-
-    // Remove any position:fixed overlays that block content
-    const fixedEls = document.querySelectorAll('[class*="overlay"], [class*="modal"], [class*="backdrop"], [id*="consent"], [id*="cookie"]');
-    fixedEls.forEach((el) => {
-      const style = window.getComputedStyle(el);
-      if (style.position === "fixed" && parseFloat(style.opacity) < 0.1) {
-        el.remove();
-      }
-    });
-  });
+  } catch (e) {
+    console.log("[TEST] ⚠️ forceFullPageScroll aborted (page likely navigated)");
+  }
 }
 
 // ── Core: screenshot a single page in a single viewport ────────────────────
-async function screenshotPage(url, viewportName, browserlessUrl, browserlessToken) {
+async function screenshotPage(url, viewportName, browserlessUrl, browserlessToken, scenarioSteps = []) {
   const slug = urlToSlug(url);
   const today = new Date().toISOString().split("T")[0];
   const viewport = VIEWPORTS[viewportName];
@@ -259,16 +263,19 @@ async function screenshotPage(url, viewportName, browserlessUrl, browserlessToke
     .replace("https://", "wss://")
     .replace("http://", "ws://")}?token=${browserlessToken}&blockAds=true&stealth=true&--disable-blink-features=AutomationControlled`;
 
-  const browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
+  const browser = await chromium.connectOverCDP(wsEndpoint);
   try {
-    const page = await browser.newPage();
-    await page.setViewport(viewport);
-    await page.setUserAgent(USER_AGENTS[viewportName]);
-    await page.setExtraHTTPHeaders({
-      "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+    const context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+      deviceScaleFactor: viewport.deviceScaleFactor,
+      userAgent: USER_AGENTS[viewportName],
+      extraHTTPHeaders: {
+        "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+      }
     });
+    const page = await context.newPage();
 
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
     await sleep(2000);
 
     // Handle Cloudflare challenge
@@ -289,19 +296,91 @@ async function screenshotPage(url, viewportName, browserlessUrl, browserlessToke
     const consented = await dismissCookieConsent(page);
     if (consented) console.log("   🍪 Cookie consent dismissed");
 
-    // Force the page to be scrollable (remove overflow:hidden etc.)
-    await forceFullPageScroll(page);
-    await sleep(500);
+    // ── Execute Custom Scenario or Default ─────────────────────────────────────
+    if (scenarioSteps && scenarioSteps.length > 0) {
+      console.log(`   🎬 Executing ${scenarioSteps.length} scenario steps...`);
+      
+      const getLocator = (page, step) => {
+        const sel = step.selector || "";
+        switch (step.locatorType) {
+          case "role":
+            if (Array.isArray(step.selector)) return page.getByRole(step.selector[0], step.selector[1]);
+            try {
+              const parsed = JSON.parse(sel);
+              if (Array.isArray(parsed)) return page.getByRole(parsed[0], parsed[1]);
+            } catch(e) {}
+            return page.getByRole(sel);
+          case "text": return page.getByText(sel);
+          case "label": return page.getByLabel(sel);
+          case "placeholder": return page.getByPlaceholder(sel);
+          case "alt": return page.getByAltText(sel);
+          case "title": return page.getByTitle(sel);
+          case "testid": return page.getByTestId(sel);
+          case "css":
+          default:
+            return page.locator(sel);
+        }
+      };
 
-    // Scroll to load lazy content
-    await autoScroll(page);
+      for (const [index, step] of scenarioSteps.entries()) {
+        try {
+          switch (step.type) {
+            case "wait":
+              console.log(`      ⏳ wait: ${step.ms}ms`);
+              await sleep(Number(step.ms) || 1000);
+              break;
+            case "waitForSelector": {
+              console.log(`      👀 waitForSelector: ${step.selector}`);
+              await getLocator(page, step).first().waitFor({ state: "visible", timeout: 15000 });
+              break;
+            }
+            case "click": {
+              console.log(`      🖱️ click: ${step.selector}`);
+              await getLocator(page, step).first().click({ timeout: 15000 });
+              break;
+            }
+            case "type": {
+              console.log(`      ⌨️ type in ${step.selector}: ${step.value}`);
+              await getLocator(page, step).first().fill(step.value || "", { timeout: 15000 });
+              break;
+            }
+            case "screenshot":
+              console.log(`      📸 custom screenshot step`);
+              // Force scrollable again in case scrolling re-triggered any overflow locks
+              await forceFullPageScroll(page);
+              await sleep(500);
+              await page.screenshot({ path: filepath, fullPage: true, type: "jpeg", quality: 50 });
+              break;
+            default:
+              console.log(`      ⚠️ Unknown step type: ${step.type}`);
+          }
+        } catch (stepErr) {
+          console.warn(`      ❌ Step ${index + 1} (${step.type}) failed: ${stepErr.message}`);
+        }
+      }
+      
+      // If the scenario didn't explicitly take a screenshot, take one at the end
+      if (!scenarioSteps.some(s => s.type === "screenshot")) {
+         await forceFullPageScroll(page);
+         await page.screenshot({ path: filepath, fullPage: true, type: "jpeg", quality: 50 });
+      }
+      
+    } else {
+      // Default Flow (No Scenario)
+      // Force the page to be scrollable (remove overflow:hidden etc.)
+      await forceFullPageScroll(page);
+      await sleep(500);
 
-    // Force scrollable again in case scrolling re-triggered any overflow locks
-    await forceFullPageScroll(page);
-    await sleep(500);
+      // Scroll to load lazy content
+      await autoScroll(page);
 
-    // Screenshot
-    await page.screenshot({ path: filepath, fullPage: true, type: "jpeg", quality: 50 });
+      // Force scrollable again in case scrolling re-triggered any overflow locks
+      await forceFullPageScroll(page);
+      await sleep(500);
+
+      // Screenshot
+      await page.screenshot({ path: filepath, fullPage: true, type: "jpeg", quality: 50 });
+    }
     const size = fs.statSync(filepath).size;
     console.log(`   ✅ ${(size / 1024).toFixed(0)} KB`);
     return { url, slug, viewport: viewportName, success: true, size };
@@ -319,6 +398,19 @@ export async function runSingleScreenshot(url, browserlessUrl, browserlessToken)
   const slug = urlToSlug(url);
   const totalSteps = Object.keys(VIEWPORTS).length;
 
+  // Try to find if this URL exists in the DB to fetch its scenarios
+  let target = null;
+  let scenarios = [];
+  try {
+    target = getTargets().find(t => t.url === url);
+    if (target) {
+      scenarios = getScenarios(target.id);
+    }
+  } catch(e) {}
+  
+  // Use the first scenario if available
+  const scenarioSteps = scenarios.length > 0 ? scenarios[0].steps : [];
+
   currentRun = {
     running: true,
     startedAt: new Date().toISOString(),
@@ -334,7 +426,7 @@ export async function runSingleScreenshot(url, browserlessUrl, browserlessToken)
     console.log(`[${step}/${totalSteps}] ${viewportName} → ${url}`);
 
     try {
-      const result = await screenshotPage(url, viewportName, browserlessUrl, browserlessToken);
+      const result = await screenshotPage(url, viewportName, browserlessUrl, browserlessToken, scenarioSteps);
       currentRun.results.push(result);
     } catch (err) {
       console.error(`   ❌ ${err.message}`);
@@ -348,15 +440,27 @@ export async function runSingleScreenshot(url, browserlessUrl, browserlessToken)
   return currentRun;
 }
 
-// ── Run all URLs from sitemap ──────────────────────────────────────────────
+// ── Run all URLs (Full Run) ────────────────────────────────────────────────
 export async function runScreenshots(browserlessUrl, browserlessToken) {
   if (currentRun?.running) {
     throw new Error("A screenshot run is already in progress");
   }
 
-  const urls = await parseSitemap();
+  let targets = [];
+  try {
+    targets = getTargets();
+  } catch (err) {
+    console.error("Failed to fetch targets from DB:", err);
+    throw err;
+  }
+
+  if (targets.length === 0) {
+    console.log("No URLs configured. Skipping run.");
+    return;
+  }
+
   const today = new Date().toISOString().split("T")[0];
-  const totalSteps = urls.length * Object.keys(VIEWPORTS).length;
+  const totalSteps = targets.length * Object.keys(VIEWPORTS).length;
 
   currentRun = {
     running: true,
@@ -368,8 +472,13 @@ export async function runScreenshots(browserlessUrl, browserlessToken) {
 
   let step = 0;
 
-  for (const url of urls) {
-    const slug = urlToSlug(url);
+  for (const target of targets) {
+    const url = target.url;
+    const slug = target.slug;
+    
+    let scenarios = [];
+    try { scenarios = getScenarios(target.id); } catch(e) {}
+    const scenarioSteps = scenarios.length > 0 ? scenarios[0].steps : [];
 
     for (const viewportName of Object.keys(VIEWPORTS)) {
       step++;
@@ -377,7 +486,7 @@ export async function runScreenshots(browserlessUrl, browserlessToken) {
       console.log(`[${step}/${totalSteps}] ${viewportName} → ${url}`);
 
       try {
-        const result = await screenshotPage(url, viewportName, browserlessUrl, browserlessToken);
+        const result = await screenshotPage(url, viewportName, browserlessUrl, browserlessToken, scenarioSteps);
         currentRun.results.push(result);
       } catch (err) {
         console.error(`   ❌ ${err.message}`);
@@ -390,4 +499,121 @@ export async function runScreenshots(browserlessUrl, browserlessToken) {
   currentRun.completedAt = new Date().toISOString();
   console.log(`\n🏁 Run complete: ${currentRun.results.filter((r) => r.success).length}/${totalSteps} succeeded`);
   return currentRun;
+}
+
+// ── Test a Scenario ────────────────────────────────────────────────────────
+export async function runTestScenario(url, steps, browserlessUrl, browserlessToken) {
+  const wsEndpoint = `${browserlessUrl
+    .replace("https://", "wss://")
+    .replace("http://", "ws://")}?token=${browserlessToken}&blockAds=true&stealth=true&--disable-blink-features=AutomationControlled`;
+
+  const browser = await chromium.connectOverCDP(wsEndpoint);
+  let base64Image = null;
+
+  try {
+    const context = await browser.newContext({
+      viewport: { width: VIEWPORTS.desktop.width, height: VIEWPORTS.desktop.height },
+      deviceScaleFactor: VIEWPORTS.desktop.deviceScaleFactor,
+      userAgent: USER_AGENTS.desktop,
+      extraHTTPHeaders: {
+        "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+      }
+    });
+    const page = await context.newPage();
+
+    console.log(`[TEST] → ${url}`);
+    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+    await sleep(2000);
+
+    const title = await page.title();
+    if (title.includes("Just a moment")) {
+      console.log("[TEST] ⏳ Cloudflare challenge — waiting...");
+      try {
+        await page.waitForFunction(() => !document.title.includes("Just a moment"), {
+          timeout: 30000,
+        });
+        await sleep(3000);
+      } catch {}
+    }
+
+    await dismissCookieConsent(page);
+    await forceFullPageScroll(page);
+    await sleep(500);
+
+    const getLocator = (page, step) => {
+      const sel = step.selector || "";
+      switch (step.locatorType) {
+        case "role":
+          if (Array.isArray(step.selector)) return page.getByRole(step.selector[0], step.selector[1]);
+          try {
+            const parsed = JSON.parse(sel);
+            if (Array.isArray(parsed)) return page.getByRole(parsed[0], parsed[1]);
+          } catch(e) {}
+          return page.getByRole(sel);
+        case "text": return page.getByText(sel);
+        case "label": return page.getByLabel(sel);
+        case "placeholder": return page.getByPlaceholder(sel);
+        case "alt": return page.getByAltText(sel);
+        case "title": return page.getByTitle(sel);
+        case "testid": return page.getByTestId(sel);
+        case "css":
+        default: return page.locator(sel);
+      }
+    };
+
+    if (steps && steps.length > 0) {
+      console.log(`[TEST] 🎬 Executing ${steps.length} scenario steps...`);
+      for (const [index, step] of steps.entries()) {
+        try {
+          switch (step.type) {
+            case "wait":
+              console.log(`[TEST] ⏳ wait: ${step.ms}ms`);
+              await sleep(Number(step.ms) || 1000);
+              break;
+            case "waitForSelector": {
+              console.log(`[TEST] 👀 waitForSelector: ${step.selector}`);
+              await getLocator(page, step).first().waitFor({ state: "visible", timeout: 15000 });
+              break;
+            }
+            case "click": {
+              console.log(`[TEST] 🖱️ click: ${step.selector}`);
+              await getLocator(page, step).first().click({ timeout: 15000 });
+              break;
+            }
+            case "type": {
+              console.log(`[TEST] ⌨️ type in ${step.selector}: ${step.value}`);
+              await getLocator(page, step).first().fill(step.value || "", { timeout: 15000 });
+              break;
+            }
+            case "screenshot":
+              console.log(`[TEST] 📸 custom screenshot step`);
+              await forceFullPageScroll(page);
+              await sleep(500);
+              const buffer = await page.screenshot({ fullPage: true, type: "jpeg", quality: 50 });
+              base64Image = buffer.toString("base64");
+              break;
+            default:
+              console.log(`[TEST] ⚠️ Unknown step type: ${step.type}`);
+          }
+        } catch (stepErr) {
+          console.warn(`[TEST] ❌ Step ${index + 1} (${step.type}) failed: ${stepErr.message}`);
+        }
+      }
+    } else {
+      await autoScroll(page);
+    }
+
+    if (!base64Image) {
+       await forceFullPageScroll(page);
+       const buffer = await page.screenshot({ fullPage: true, type: "jpeg", quality: 50 });
+       base64Image = buffer.toString("base64");
+    }
+    
+    return { success: true, imageBase64: base64Image };
+  } catch (err) {
+    console.error(`[TEST] ❌ Failed: ${err.message}`);
+    return { success: false, error: err.message };
+  } finally {
+    await browser.close();
+  }
 }

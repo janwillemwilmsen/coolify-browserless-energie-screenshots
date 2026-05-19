@@ -25,11 +25,13 @@ export default function Dashboard({ urls, dates, onSelectUrl }) {
       </div>
 
       <div className="url-grid">
-        {urls.map(({ url, slug }) => (
+        {urls.map(({ url, slug, brand, type }) => (
           <UrlCard
             key={slug}
             url={url}
             slug={slug}
+            brand={brand}
+            type={type}
             latestDate={latestDate}
             onClick={() => onSelectUrl(url, slug)}
           />
@@ -39,7 +41,7 @@ export default function Dashboard({ urls, dates, onSelectUrl }) {
   );
 }
 
-function UrlCard({ url, slug, latestDate, onClick }) {
+function UrlCard({ url, slug, brand, type, latestDate, onClick }) {
   const [imgError, setImgError] = useState(false);
   const domain = new URL(url).hostname;
 
@@ -62,7 +64,12 @@ function UrlCard({ url, slug, latestDate, onClick }) {
         )}
       </div>
       <div className="url-card-info">
-        <h3>{domain}</h3>
+        <h3>{brand || domain}</h3>
+        {type && (
+          <div className="badge" style={{ display: "inline-block", background: "var(--primary)", color: "#fff", padding: "2px 8px", borderRadius: "12px", fontSize: "0.75rem", marginBottom: "4px" }}>
+            {type}
+          </div>
+        )}
         <div className="meta">
           <span>{url}</span>
         </div>
